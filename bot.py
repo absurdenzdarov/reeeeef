@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 
 # ===== НАСТРОЙКИ =====
 TOKEN = "8142641225:AAE_BCU58ZX3DMOne-Q4cI6aUs2UWOpFkrs"  # Вставьте сюда токен от @BotFather
-FILE_URL = "https://disk.360.yandex.ru/d/Xc08g8WbTavdHQ/%D0%AD%D0%A3%D0%B8%D0%9A.xls"
+FILE_URL = "https://docs.360.yandex.ru/docs/view?url=ya-disk-public%3A%2F%2FwlsDzWxYtmepORmaCzucIdL43o11AeptdKrtDwjRCx1lh2I%2BrjDaPPZDnNCCR%2BAFDqZvSgIch5AN9ddz7ydViQ%3D%3D%3A%2FЭУиК.xls&name=ЭУиК.xls&nosw=1"
 GROUP_NAME = "РМ-25-9-2"
 
 # ===== ФУНКЦИЯ СКАЧИВАНИЯ С ЯНДЕКС.ДИСКА =====
