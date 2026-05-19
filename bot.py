@@ -7,254 +7,195 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from datetime import datetime, timedelta
 
-# ===== НАСТРОЙКИ =====
-TOKEN = "8142641225:AAE_BCU58ZX3DMOne-Q4cI6aUs2UWOpFkrs"  # Вставьте сюда токен от @BotFather
-FILE_URL = "https://docs.360.yandex.ru/docs/view?url=ya-disk-public%3A%2F%2FwlsDzWxYtmepORmaCzucIdL43o11AeptdKrtDwjRCx1lh2I%2BrjDaPPZDnNCCR%2BAFDqZvSgIch5AN9ddz7ydViQ%3D%3D%3A%2FЭУиК.xls&name=ЭУиК.xls&nosw=1"
+# ===== НАСТРОЙКИ (ВСТАВЬТЕ СВОЙ ТОКЕН) =====
+TOKEN = "8142641225:AAE_BCU58ZX3DMOne-Q4cI6aUs2UWOpFkrs"
+PUBLIC_KEY = "Xc08g8WbTavdHQ"  # Ваш публичный ключ из ссылки
+FILENAME = "ЭУиК.xls"          # Имя файла
 GROUP_NAME = "РМ-25-9-2"
 
-# ===== ФУНКЦИЯ СКАЧИВАНИЯ С ЯНДЕКС.ДИСКА =====
-def download_from_yadisk(public_url):
+# ===== СКАЧИВАНИЕ С ЯНДЕКС.ДИСКА ЧЕРЕЗ API =====
+def download_from_yadisk():
     """Скачивает файл с Яндекс.Диска по публичной ссылке"""
-    # Извлекаем public key
-    match = re.search(r'/d/([^/]+)', public_url)
-    if not match:
-        raise Exception("Неверный формат ссылки Яндекс.Диска")
-    public_key = match.group(1)
-    
-    # Запрашиваем информацию о файле через API
+    # Получаем информацию о файлах в публичной папке
     api_url = "https://cloud-api.yandex.net/v1/disk/public/resources"
-    response = requests.get(api_url, params={"public_key": public_key})
+    response = requests.get(api_url, params={"public_key": PUBLIC_KEY})
     response.raise_for_status()
-    file_info = response.json()
+    data = response.json()
     
-    # Получаем прямую ссылку на скачивание
-    download_url = file_info.get("file")
-    if not download_url:
-        raise Exception("Не удалось получить ссылку на скачивание")
+    # Ищем нужный файл
+    file_url = None
+    for item in data.get("_embedded", {}).get("items", []):
+        if item.get("name") == FILENAME:
+            file_url = item.get("file")
+            break
+    
+    if not file_url:
+        raise Exception(f"Файл {FILENAME} не найден в публичной папке")
     
     # Скачиваем файл
-    file_response = requests.get(download_url)
+    file_response = requests.get(file_url)
     file_response.raise_for_status()
-    return file_response.content
+    return BytesIO(file_response.content)
 
-# ===== ПАРСИНГ РАСПИСАНИЯ ДЛЯ КОНКРЕТНОЙ ГРУППЫ =====
-def parse_schedule_for_group(file_content, group_name):
-    """Извлекает расписание для указанной группы из Excel-файла"""
-    try:
-        file_data = BytesIO(file_content)
-        xls = pd.ExcelFile(file_data)
-        all_pairs = []
+# ===== ПАРСИНГ =====
+def parse_schedule(file_data):
+    xls = pd.ExcelFile(file_data)
+    all_pairs = []
+    
+    for sheet_name in xls.sheet_names:
+        df = pd.read_excel(xls, sheet_name=sheet_name, header=None)
         
-        for sheet_name in xls.sheet_names:
-            df = pd.read_excel(xls, sheet_name=sheet_name, header=None)
-            
-            # Ищем колонку с названием группы
-            group_col = None
-            header_row = None
-            
-            for i in range(min(30, len(df))):
-                row = df.iloc[i].astype(str).str.strip()
-                for j, val in enumerate(row):
-                    if group_name in val:
-                        group_col = j
-                        header_row = i
-                        break
-                if group_col is not None:
+        # Ищем колонку с нужной группой
+        group_col = None
+        header_row = None
+        
+        for i in range(min(30, len(df))):
+            row = df.iloc[i].astype(str).str.strip()
+            for j, val in enumerate(row):
+                if GROUP_NAME in val:
+                    group_col = j
+                    header_row = i
                     break
+            if group_col is not None:
+                break
+        
+        if group_col is None:
+            continue
+        
+        teacher_col = group_col + 1
+        room_col = group_col + 2
+        current_day = ""
+        
+        # Проходим по строкам
+        for i in range(header_row + 1, len(df)):
+            row = df.iloc[i]
+            pair_num = str(row[1]).strip()
             
-            if group_col is None:
-                continue
-            
-            # Колонка преподавателя и кабинета (рядом)
-            teacher_col = group_col + 1
-            room_col = group_col + 2
-            
-            # Ищем начало расписания (где в колонке B есть номера пар 1-6)
-            start_row = None
-            for i in range(header_row + 1, min(header_row + 60, len(df))):
-                val = str(df.iloc[i, 1]).strip()
-                if val.isdigit() and 1 <= int(val) <= 6:
-                    start_row = i
-                    break
-            
-            if start_row is None:
-                continue
-            
-            # Парсим строки расписания
-            current_day = ""
-            for i in range(start_row, len(df)):
-                row = df.iloc[i]
-                
-                # Проверяем, не закончилось ли расписание (пустая строка или NaN в паре)
-                pair_num = str(row[1]).strip()
-                if pair_num == 'nan' or pair_num == '':
-                    # Если дошли до пустой строки и нет данных - выходим
-                    if i > start_row + 20:
-                        break
-                    continue
-                
-                # Дата и день недели (колонка A)
+            # Проверяем номер пары
+            if pair_num.isdigit() and 1 <= int(pair_num) <= 6:
+                # День недели
                 day_val = str(row[0]).strip()
-                if day_val != 'nan' and day_val != '' and any(day in day_val for day in ['Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота', 'Воскресенье']):
+                if day_val != 'nan' and any(d in day_val for d in ['Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота']):
                     current_day = day_val
                 
-                # Если это не номер пары - пропускаем
-                if not pair_num.isdigit() or int(pair_num) > 6:
+                # Время
+                time_val = str(row[2]).strip()
+                if time_val == 'nan':
                     continue
                 
-                # Время (колонка C)
-                time = str(row[2]).strip()
-                if time == 'nan' or time == '':
-                    continue
-                
-                # Данные группы
+                # Данные
                 subject = str(row[group_col]).strip()
                 teacher = str(row[teacher_col]).strip()
                 room = str(row[room_col]).strip()
                 
-                # Пропускаем пустые или классные часы
-                if subject == 'nan' or subject == '' or subject == 'Классный час' or 'Классный час' in subject:
-                    continue
-                
-                all_pairs.append({
-                    'day': current_day,
-                    'pair_num': pair_num,
-                    'time': time,
-                    'subject': subject,
-                    'teacher': teacher,
-                    'room': room
-                })
-        
-        return all_pairs
-    except Exception as e:
-        logging.error(f"Ошибка парсинга: {e}")
-        return []
-
-# ===== ФОРМАТИРОВАНИЕ ПО ШАБЛОНУ =====
-def format_schedule(pairs, filter_day=None):
-    """Форматирует расписание в нужный шаблон"""
-    if not pairs:
-        return "❌ Расписание не найдено. Проверьте файл или группу."
+                # Пропускаем пустые и классные часы
+                if subject and subject != 'nan' and subject != 'Классный час' and 'Классный час' not in subject:
+                    all_pairs.append({
+                        'day': current_day,
+                        'pair': pair_num,
+                        'time': time_val,
+                        'subject': subject,
+                        'teacher': teacher,
+                        'room': room
+                    })
     
-    # Фильтруем по дню, если нужно
-    filtered = pairs
+    return all_pairs
+
+# ===== ФОРМАТИРОВАНИЕ =====
+def format_schedule(pairs, filter_day=None):
+    if not pairs:
+        return "❌ Расписание не найдено. Проверьте файл."
+    
+    # Фильтруем по дню
     if filter_day:
-        filtered = [p for p in pairs if filter_day.lower() in p['day'].lower()]
+        filtered = [p for p in pairs if filter_day in p['day']]
+    else:
+        filtered = pairs
     
     if not filtered:
-        return "📭 На этот день пар нет."
+        return f"📭 На {filter_day if filter_day else 'эту неделю'} пар нет."
     
     # Группируем по дням
     days = {}
     for p in filtered:
-        day_name = p['day']
-        if day_name not in days:
-            days[day_name] = []
-        days[day_name].append(p)
+        days.setdefault(p['day'], []).append(p)
+    
+    # Сортируем пары
+    for day in days:
+        days[day].sort(key=lambda x: int(x['pair']))
     
     # Формируем сообщение
     result = []
     for day_name, day_pairs in days.items():
         result.append(f"📅 {day_name} — Группа: {GROUP_NAME}")
         result.append("")
-        
         for p in day_pairs:
-            result.append(f"{p['pair_num']}️⃣ ⏳ {p['time']}")
+            result.append(f"{p['pair']}️⃣ ⏳ {p['time']}")
             result.append(f"👨‍👩‍👧‍👦: {GROUP_NAME}")
             result.append(f"📚: {p['subject']}")
             result.append(f"👨‍🏫: {p['teacher']}")
             result.append(f"🚪: {p['room']}")
-            result.append("")  # пустая строка между парами
-        
+            result.append("")
         result.append("=" * 35)
         result.append("")
     
     return "\n".join(result)
 
-# ===== ОПРЕДЕЛЕНИЕ ТЕКУЩЕГО ДНЯ =====
-def get_current_day_name():
-    """Возвращает название дня недели для фильтрации"""
-    weekdays = {
-        0: 'Понедельник',
-        1: 'Вторник',
-        2: 'Среда',
-        3: 'Четверг',
-        4: 'Пятница',
-        5: 'Суббота',
-        6: 'Воскресенье'
-    }
-    today_num = datetime.now().weekday()
-    return weekdays[today_num]
+# ===== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ =====
+def get_today_name():
+    weekdays = ['Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота', 'Воскресенье']
+    return weekdays[datetime.now().weekday()]
 
-def get_tomorrow_day_name():
-    """Возвращает название следующего дня недели"""
-    tomorrow = datetime.now() + timedelta(days=1)
-    weekdays = {
-        0: 'Понедельник',
-        1: 'Вторник',
-        2: 'Среда',
-        3: 'Четверг',
-        4: 'Пятница',
-        5: 'Суббота',
-        6: 'Воскресенье'
-    }
-    return weekdays[tomorrow.weekday()]
+def get_tomorrow_name():
+    weekdays = ['Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота', 'Воскресенье']
+    return weekdays[(datetime.now() + timedelta(days=1)).weekday()]
 
 # ===== КОМАНДЫ БОТА =====
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def start(update: Update, context):
     await update.message.reply_text(
         f"🎓 **Бот расписания колледжа**\n\n"
-        f"📌 Группа: **{GROUP_NAME}**\n\n"
+        f"📌 Группа: **{GROUP_NAME}**\n"
+        f"📁 Источник: Яндекс.Диск (обновляется автоматически)\n\n"
         f"🔹 `/today` — расписание на сегодня\n"
-        f"🔹 `/tomorrow` — расписание на завтра\n"
-        f"🔹 `/week` — всё расписание на неделю\n"
-        f"🔹 `/update` — принудительно обновить данные\n\n"
-        f"📅 Расписание берётся с Яндекс.Диска автоматически.",
+        f"🔹 `/tomorrow` — на завтра\n"
+        f"🔹 `/week` — на всю неделю",
         parse_mode='Markdown'
     )
 
-async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("⏳ Загружаю расписание...")
-    
+async def today(update: Update, context):
+    msg = await update.message.reply_text("⏳ Загружаю свежее расписание с Яндекс.Диска...")
     try:
-        file_content = download_from_yadisk(FILE_URL)
-        pairs = parse_schedule_for_group(file_content, GROUP_NAME)
-        today_name = get_current_day_name()
-        text = format_schedule(pairs, today_name)
-        await update.message.reply_text(text[:4096])  # Telegram лимит
+        file_data = download_from_yadisk()
+        pairs = parse_schedule(file_data)
+        text = format_schedule(pairs, get_today_name())
+        await msg.edit_text(text[:4096])
     except Exception as e:
-        await update.message.reply_text(f"❌ Ошибка: {str(e)[:200]}")
+        await msg.edit_text(f"❌ Ошибка: {str(e)[:200]}\n\nПроверьте доступность файла на Яндекс.Диске.")
 
-async def tomorrow(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("⏳ Загружаю расписание...")
-    
+async def tomorrow(update: Update, context):
+    msg = await update.message.reply_text("⏳ Загружаю расписание на завтра...")
     try:
-        file_content = download_from_yadisk(FILE_URL)
-        pairs = parse_schedule_for_group(file_content, GROUP_NAME)
-        tomorrow_name = get_tomorrow_day_name()
-        text = format_schedule(pairs, tomorrow_name)
-        await update.message.reply_text(text[:4096])
+        file_data = download_from_yadisk()
+        pairs = parse_schedule(file_data)
+        text = format_schedule(pairs, get_tomorrow_name())
+        await msg.edit_text(text[:4096])
     except Exception as e:
-        await update.message.reply_text(f"❌ Ошибка: {str(e)[:200]}")
+        await msg.edit_text(f"❌ Ошибка: {str(e)[:200]}")
 
-async def week(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("⏳ Загружаю расписание на всю неделю...")
-    
+async def week(update: Update, context):
+    msg = await update.message.reply_text("⏳ Загружаю расписание на неделю...")
     try:
-        file_content = download_from_yadisk(FILE_URL)
-        pairs = parse_schedule_for_group(file_content, GROUP_NAME)
+        file_data = download_from_yadisk()
+        pairs = parse_schedule(file_data)
         text = format_schedule(pairs)
-        # Разбиваем на части, если сообщение длинное
+        # Разбиваем на части
         for i in range(0, len(text), 4000):
             await update.message.reply_text(text[i:i+4000])
+        await msg.delete()
     except Exception as e:
-        await update.message.reply_text(f"❌ Ошибка: {str(e)[:200]}")
+        await msg.edit_text(f"❌ Ошибка: {str(e)[:200]}")
 
-async def force_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Принудительное обновление (очистка кэша)"""
-    await update.message.reply_text("✅ Данные будут загружены заново при следующем запросе.")
-
-# ===== ЗАПУСК БОТА =====
+# ===== ЗАПУСК =====
 def main():
     if TOKEN == "ВАШ_ТОКЕН_ОТ_BOTFATHER":
         print("❌ ОШИБКА: Вставьте свой токен в переменную TOKEN!")
@@ -262,15 +203,15 @@ def main():
         return
     
     app = Application.builder().token(TOKEN).build()
-    
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("today", today))
     app.add_handler(CommandHandler("tomorrow", tomorrow))
     app.add_handler(CommandHandler("week", week))
-    app.add_handler(CommandHandler("update", force_update))
     
-    print(f"✅ Бот запущен! Группа: {GROUP_NAME}")
-    print(f"📁 Файл: {FILE_URL}")
+    print(f"✅ Бот запущен!")
+    print(f"📁 Публичный ключ: {PUBLIC_KEY}")
+    print(f"📄 Файл: {FILENAME}")
+    print(f"👥 Группа: {GROUP_NAME}")
     app.run_polling()
 
 if __name__ == "__main__":
