@@ -1,10 +1,6 @@
-openpyxl
-xlrd
-requests
+matplotlib
 aiogram
-pandas
-xlrd
-requests
-openpyxl
-openpyxl
-openpyxl
+aiohttp
+matplotlib
+numpy
+sqlite3
