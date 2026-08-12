@@ -4,3 +4,4 @@ aiohttp
 matplotlib
 numpy
 sqlite3
+telethon
