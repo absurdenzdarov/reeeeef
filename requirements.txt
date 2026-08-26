@@ -6,3 +6,4 @@ numpy
 sqlite3
 telethon
 pandas
+requests
