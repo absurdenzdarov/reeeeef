@@ -1,14 +1,8 @@
-matplotlib
 aiogram
 aiohttp
-matplotlib
-numpy
-sqlite3
-telethon
 pandas
 requests
 xlrd
 pdfplumber
 openpyxl
-exceptions
 python-docx
