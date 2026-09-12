@@ -6,3 +6,4 @@ xlrd
 pdfplumber
 openpyxl
 python-docx
+matplotlib
