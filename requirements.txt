@@ -10,5 +10,5 @@ requests
 xlrd
 pdfplumber
 openpyxl
-docx
 exceptions
+python-docx
